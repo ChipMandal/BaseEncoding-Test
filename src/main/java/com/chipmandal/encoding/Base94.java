@@ -1,6 +1,5 @@
 package com.chipmandal.encoding;
 
-import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 
 public class Base94 implements BaseEncoding{
@@ -35,46 +34,28 @@ public class Base94 implements BaseEncoding{
         }
     }
 
+
     @Override
     public byte[] encode(byte[] input) {
         return encodePrivate1(input);
     }
 
     /**
-     * Read bytes -> Write bytes
-     * 8, 5    ->   5, 3+5
-     * 3, 8, 2 -> 3+2, 6+2
-     * 6, 7    ->   5, 1+7
-     * 1, 8, 4 -> 1+4, 4+4
-     * 4, 8, 1 -> 4+1, 7+1
-     * 7, 6    ->   5, 2+6
-     * 2, 8, 3 -> 2+3, 5+3
-     * 5, 8    ->   5, 8
+     * Handcoded bit operations.
+     *
+     * input[0] [7-3] -> output[0] [4-0]
+     * input[0] [2-0] -> ouput[1] [7-5]
+     * input[1] [7-3] -> output[1] [4-0]
+     * input[1] [2-0] -> output[2] [4-2]
+     * input[2] [7-6] -> output[2] [1-0]
+     * input[2] [5-0] -> output[3] [7-2]
+     * input[3] [7-6] -> output[3] [1-0]
+     * input[3] [5-1] -> output[4] [4-0]
+     * input[3] [0]   -> output[5] [7]
+     * input[4] [7-1] -> output[5] [6-0]
+     * input[4] [0]   -> output[6] [4]
      *
      *
-     */
-
-    /**
-     * Read bytes -> Write bytes
-     *
-     * Glossary
-     * T -> Top byte i.e. 5 bytes only [3-7]
-     * L -> Lower byte i.e. full 8 bytes [0-7]
-     *
-     *
-     * 1. 5T -> [4-0], 3L [7-5]
-     * 2. 5L -> [4-0], 3T [5-3]
-     * 3. 2T -> [2-0], 6L [7-2]
-     * 4. 2L -> [1-0], 5T [4-0], 1L [7]
-     * 5. 7L -> [6-0], 1T [4]
-     * 6. 4T -> [3-0], 4L -> [7-4]
-     * 7. 4L -> [3-0], 4T -> [4-1]
-     * 8. 1T -> [0], 7L -> [7-1]
-     * 9. 1L -> [0], 5T ->[4-0], 2L [7-6]
-     * 10. 6L -> [5-0], 2T ->[4-3]
-     * 11. 3T -> [2-0], 5L -> [7-3]
-     * 12. 3L->[2-0] , 5T -> [4-0]
-     * 13. 8L
      *
      */
     private byte[] encodePrivate0(byte[] input) {
@@ -322,8 +303,13 @@ public class Base94 implements BaseEncoding{
         return builder.toString();
     }
 
+
     @Override
     public byte[] decode(byte[] input) {
+        return decode1(input);
+    }
+
+    public byte[] decode0(byte[] input) {
         if ( input == null || input.length == 0 ) {
             return new byte[0];
         }
@@ -378,6 +364,118 @@ public class Base94 implements BaseEncoding{
     }
 
 
+    public byte[] decode1(byte[] input) {
+        if ( input == null || input.length == 0 ) {
+            return new byte[0];
+        }
+        int extraDigits = input.length % 2 == 0 ? 2 : 1;
+        int evenLength = input.length - extraDigits ;
+        int numbits = (evenLength/2) * 13;
+
+        if ( numbits % 8 == 0 && extraDigits == 1) {
+            return decode1MultipleOf8(input, numbits, evenLength);
+        } else {
+            return decode1NotMultipleOf8(input, numbits, extraDigits, evenLength);
+        }
+
+    }
+
+    public byte[] decode1NotMultipleOf8(byte[] input, int numbits, int extraDigits, int evenLength) {
+
+        // case 1 : numbits%8 == 0 && extradigits = 2
+            // x + 0  + 1 = x+1
+        // case 2 : numbits%8 != 0 && extradigits = 2
+            // x + 1 + numbits %8 >= 4
+        // case 3 : numbits%8 != 0 && extradigits = 1
+        // x + 1
+
+        int outputLength = (numbits / 8 + 1);
+        if ( extraDigits == 2 && numbits % 8 >= 4 ) {
+            outputLength++;
+        }
+        byte[] output = new byte[outputLength];
+        int writePos = 7;
+        int writeByte = 0;
+        for (int i =0; i < evenLength; i+= 2) {
+            //Write the first byte
+            if ( writePos >= 4) {
+                output[writeByte] |= (input[i] << (writePos - 4));
+                writePos = writePos - 5;
+                if ( writePos < 0) {
+                    writeByte++;
+                    writePos = 7;
+                }
+            } else {
+                output[writeByte] |= ((input[i] & 0xFF) >>> (4-writePos));
+                output[writeByte+1] |= (input[i]  << (4+writePos));
+                writeByte++;
+                writePos = 3+writePos;
+            }
+
+            //2nd byte
+            output[writeByte] |= ((input[i+1] & 0xFF) >>> (7-writePos));
+            output[writeByte + 1] |= (input[i + 1] << (writePos + 1));
+
+
+            writeByte++;
+        }
+
+
+        if ( writeByte == outputLength - 1) {
+            output[writeByte] |= (input[input.length-1] & ( 0xFF >>> (7-writePos)));
+        } else if(writeByte == outputLength - 2) {
+            output[writeByte] |= (input[input.length-2] & ( 0xFF >>> (7-writePos)));
+            output[writeByte+1] = input[input.length -1];
+        }
+
+        return output;
+    }
+    public byte[] decode1MultipleOf8(byte[] input, int numbits, int evenLength) {
+        int outputLength = (numbits / 8 );
+
+        byte[] output = new byte[outputLength];
+        int writePos = 7;
+        int writeByte = 0;
+        int i = 0;
+        for ( ; i < evenLength-2; i+= 2) {
+            //Write the first byte
+            if ( writePos >= 4) {
+                output[writeByte] |= (input[i] << (writePos - 4));
+                writePos = writePos - 5;
+                if ( writePos < 0) {
+                    writeByte++;
+                    writePos = 7;
+                }
+            } else {
+                output[writeByte] |= ((input[i] & 0xFF) >>> (4-writePos));
+                output[writeByte+1] |= (input[i]  << (4+writePos));
+                writeByte++;
+                writePos = 3+writePos;
+            }
+
+            //2nd byte
+            output[writeByte] |= ((input[i+1] & 0xFF) >>> (7-writePos));
+            output[writeByte + 1] |= (input[i + 1] << (writePos + 1));
+            writeByte++;
+        }
+        if ( writePos >= 4) {
+            output[writeByte] |= (input[i] << (writePos - 4));
+            writePos = writePos - 5;
+            if ( writePos < 0) {
+                writeByte++;
+                writePos = 7;
+            }
+        } else {
+            output[writeByte] |= ((input[i] & 0xFF) >>> (4-writePos));
+            output[writeByte+1] |= (input[i]  << (4+writePos));
+            writeByte++;
+            writePos = 3+writePos;
+        }
+
+        //2nd byte
+        output[writeByte] |= ((input[i+1] & 0xFF) >>> (7-writePos));
+        return output;
+    }
 
     @Override
     public byte[] decodeString(String input) {
